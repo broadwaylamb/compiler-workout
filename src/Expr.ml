@@ -33,15 +33,18 @@ let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
 let update x v s = fun y -> if x = y then v else s y
 
 (* An example of a non-trivial state: *)                                                   
-let s = update "x" 1 @@ update "y" 2 @@ update "z" 3 @@ update "t" 4 empty
+(* let s = update "x" 1 @@ update "y" 2 @@ update "z" 3 @@ update "t" 4 empty *)
 
 (* Some testing; comment this definition out when submitting the solution. *)
-let _ =
+(* let _ =
   List.iter
     (fun x ->
        try  Printf.printf "%s=%d\n" x @@ s x
        with Failure s -> Printf.printf "%s\n" s
-    ) ["x"; "a"; "y"; "z"; "t"; "b"]
+    ) ["x"; "a"; "y"; "z"; "t"; "b"] *)
+
+let int_from_bool b = if b then 1 else 0
+let bool_from_int i = if i = 0 then false else true
 
 (* Expression evaluator
 
@@ -50,5 +53,24 @@ let _ =
    Takes a state and an expression, and returns the value of the expression in 
    the given state.
 *)
-let eval = failwith "Not implemented yet"
-                    
+let rec eval s e = match e with
+| Const(num) -> num
+| Var(name) -> s name
+| Binop(name, e1, e2) -> (match name with
+  | "+" -> (eval s e1) + (eval s e2)
+  | "-" -> (eval s e1) - (eval s e2)
+  | "*" -> (eval s e1) * (eval s e2)
+  | "/" -> (eval s e1) / (eval s e2)
+  | "%" -> (eval s e1) mod (eval s e2)
+  | "<" -> int_from_bool ((eval s e1) < (eval s e2))
+  | ">" -> int_from_bool ((eval s e1) > (eval s e2))
+  | "<=" -> int_from_bool ((eval s e1) <= (eval s e2))
+  | ">=" -> int_from_bool ((eval s e1) >= (eval s e2))
+  | "==" -> int_from_bool ((eval s e1) = (eval s e2))
+  | "!=" -> int_from_bool ((eval s e1) <> (eval s e2))
+  | "&&" -> int_from_bool ((bool_from_int (eval s e1)) &&
+                           (bool_from_int (eval s e2)))
+  | "!!" -> int_from_bool ((bool_from_int (eval s e1)) ||
+                           (bool_from_int (eval s e2)))
+  | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" name)
+)

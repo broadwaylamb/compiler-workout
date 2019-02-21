@@ -44,7 +44,7 @@ let update x v s = fun y -> if x = y then v else s y
     ) ["x"; "a"; "y"; "z"; "t"; "b"] *)
 
 let int_from_bool b = if b then 1 else 0
-let bool_from_int i = if i = 0 then false else true
+let bool_from_int i = i != 0
 
 (* Expression evaluator
 

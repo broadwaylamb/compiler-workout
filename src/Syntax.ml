@@ -34,6 +34,31 @@ module Expr =
     *)
     let update x v s = fun y -> if x = y then v else s y
 
+    let int_from_bool b = if b then 1 else 0
+    let bool_from_int i = i != 0
+
+    (* Binary operation evaluator
+
+         val evalBinop : string -> int -> int -> int
+
+       Evaluates the given binary operator on lhs and rhs as its arguments
+     *)
+    let evalBinop name lhs rhs = match name with
+    | "+" -> lhs + rhs
+    | "-" -> lhs - rhs
+    | "*" -> lhs * rhs
+    | "/" -> lhs / rhs
+    | "%" -> lhs mod rhs
+    | "<" -> int_from_bool (lhs < rhs)
+    | ">" -> int_from_bool (lhs > rhs)
+    | "<=" -> int_from_bool (lhs <= rhs)
+    | ">=" -> int_from_bool (lhs >= rhs)
+    | "==" -> int_from_bool (lhs = rhs)
+    | "!=" -> int_from_bool (lhs <> rhs)
+    | "&&" -> int_from_bool ((bool_from_int lhs) && (bool_from_int rhs))
+    | "!!" -> int_from_bool ((bool_from_int lhs) || (bool_from_int rhs))
+    | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" name)
+
     (* Expression evaluator
 
           val eval : state -> t -> int
@@ -41,7 +66,10 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval s e = match e with
+    | Const(num) -> num
+    | Var(name) -> s name
+    | Binop(name, e1, e2) -> evalBinop name (eval s e1) (eval s e2)
 
   end
                     
@@ -65,7 +93,15 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval conf stmt =
+      let (st, i, o) = conf in
+      match stmt with
+      | Read(var) -> (match i with
+        | [] -> failwith (Printf.sprintf "Reached EOF")
+        | head :: tail -> (Expr.update var head st, tail, o))
+      | Write(expr) -> (st, i, o @ [Expr.eval st expr])
+      | Assign(var, expr) -> (Expr.update var (Expr.eval st expr) st, i, o)
+      | Seq(stmt1, stmt2) -> eval (eval conf stmt1) stmt2
                                                          
   end
 

@@ -18,13 +18,39 @@ type prg = insn list
  *)
 type config = int list * Stmt.config
 
+(* Single instruction evaluation
+     
+     val evalInstruction : config -> insn -> config
+   Takes a configuration and an instruction, and returns a configuration
+   as a result
+ *)
+let evalInstruction conf instruction =
+  let (stack, stmtConf) = conf in
+  let (state, input, output) = stmtConf in
+  match instruction with
+  | BINOP(op) -> (match stack with
+    | rhs :: lhs :: tail ->
+      ((Language.Expr.evalBinop op lhs rhs) :: tail, stmtConf)
+    | _ -> conf)
+  | CONST(value) -> (value :: stack, stmtConf)
+  | READ -> (match input with
+    | head :: tail -> (head :: stack, (state, tail, output))
+    | [] -> failwith (Printf.sprintf "Reached EOF"))
+  | WRITE -> (match stack with
+    | value :: tail -> (tail, (state, input, output @ [value]))
+    | _ -> conf)
+  | LD(var) -> ((state var) :: stack, stmtConf)
+  | ST(var) -> (match stack with
+    | head :: tail -> (tail, (Language.Expr.update var head state, input, output))
+    | _ -> conf)
+
 (* Stack machine interpreter
-
      val eval : config -> prg -> config
-
    Takes a configuration and a program, and returns a configuration as a result
-*)                         
-let rec eval conf prog = failwith "Not yet implemented"
+ *)                         
+let rec eval conf program = match program with
+| [] -> conf
+| instruction :: rest -> eval (evalInstruction conf instruction) rest
 
 (* Top-level evaluation
 

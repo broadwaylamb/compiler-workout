@@ -87,12 +87,12 @@ module Expr =
             [|
               `Lefta, [parseBinop "!!"];
               `Lefta, [parseBinop "&&"];
-              `Nona,  [parseBinop "==";
-                       parseBinop "!=";
-                       parseBinop "<=";
-                       parseBinop "<" ;
-                       parseBinop ">=";
-                       parseBinop ">"];
+              `Nona, [parseBinop "==";
+                      parseBinop "!=";
+                      parseBinop "<=";
+                      parseBinop "<" ;
+                      parseBinop ">=";
+                      parseBinop ">"];
               `Lefta, [parseBinop "+"; parseBinop "-"];
               `Lefta, [parseBinop "*"; parseBinop "/"; parseBinop "%"]
             |]

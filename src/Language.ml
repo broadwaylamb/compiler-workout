@@ -109,18 +109,18 @@ module Stmt =
 
     (* The type for statements *)
     @type t =
-    (* read into the variable           *) | Read   of string
-    (* write the value of an expression *) | Write  of Expr.t
-    (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t 
-    (* empty statement                  *) | Skip
-    (* conditional                      *) | If     of Expr.t * t * t
-    (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* read into the variable           *) | Read        of string
+    (* write the value of an expression *) | Write       of Expr.t
+    (* assignment                       *) | Assign      of string * Expr.t
+    (* composition                      *) | Seq         of t * t 
+    (* empty statement                  *) | Skip     
+    (* conditional                      *) | If          of Expr.t * t * t
+    (* loop with a pre-condition        *) | While       of Expr.t * t
+    (* loop with a post-condition       *) | RepeatUntil of t * Expr.t with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
-    type config = Expr.state * int list * int list 
-
+    type config = Expr.state * int list * int list
+    
     (* Statement evaluator
 
          val eval : config -> t -> config
@@ -136,17 +136,92 @@ module Stmt =
       | Write(expr) -> (st, i, o @ [Expr.eval st expr])
       | Assign(var, expr) -> (Expr.update var (Expr.eval st expr) st, i, o)
       | Seq(stmt1, stmt2) -> eval (eval conf stmt1) stmt2
+      | Skip -> conf
+      | If(cond, then_branch, else_branch) ->
+        if Expr.bool_from_int (Expr.eval st cond)
+        then eval conf then_branch
+        else eval conf else_branch
+      | While(cond, body) -> 
+        let rec evalWhile conf =
+          let (st, _, _) = conf in
+          if Expr.bool_from_int (Expr.eval st cond)
+          then evalWhile (eval conf body)
+          else conf
+        in
+        evalWhile conf
+      | RepeatUntil(body, cond) ->
+        let rec evalRepeatUntil conf =
+          let conf = eval conf body in
+          let (st, _, _) = conf in
+          if Expr.bool_from_int (Expr.eval st cond)
+          then conf
+          else evalRepeatUntil conf
+        in
+        evalRepeatUntil conf
 
     (* Statement parser *)
     ostap (
-      parse: top_level_stmt;
-      top_level_stmt: stmt1: stmt -";"
-        stmt2: top_level_stmt { Seq(stmt1, stmt2) } | stmt;
-      stmt: read_stmt | write_stmt | assign_stmt;
-      assign_stmt: x: IDENT -":=" e: !(Expr.expr) { Assign(x, e) };
-      read_stmt: - !(Util.keyword)["read"] -"(" x: IDENT -")" { Read(x) };
-      write_stmt: - !(Util.keyword)["write"]
-        -"(" e: !(Expr.expr) -")" { Write(e) }
+      parse:
+        top_level_stmt;
+      top_level_stmt:
+        stmt1: stmt -";" stmt2: top_level_stmt { Seq(stmt1, stmt2) } | stmt;
+      stmt: 
+        read_stmt   |
+        write_stmt  |
+        assign_stmt |
+        skip_stmt   |
+        if_stmt     |
+        while_stmt  |
+        repeat_stmt |
+        for_stmt;
+      assign_stmt:
+        x: IDENT -":=" e: !(Expr.expr) { Assign(x, e) };
+      read_stmt:
+        - !(Util.keyword)["read"] -"(" x: IDENT -")" { Read(x) };
+      write_stmt:
+        - !(Util.keyword)["write"] -"(" e: !(Expr.expr) -")" { Write(e) };
+      skip_stmt:
+        - !(Util.keyword)["skip"] { Skip };
+      condition_part:
+        cond: !(Expr.expr)
+        - !(Util.keyword)["then"] then_branch: top_level_stmt
+        { (cond, then_branch) };
+      if_stmt:
+        - !(Util.keyword)["if"] first_cond: condition_part
+        elif_branches: (- !(Util.keyword)["elif"] condition_part)*
+        else_branch: (- !(Util.keyword)["else"] top_level_stmt)?
+        - !(Util.keyword)["fi"]
+        {
+          let (cond, body) = first_cond in
+          let else_branch = match else_branch with
+          | None -> Skip
+          | Some stmt -> stmt
+          in
+          let fold_elif (cond, then_branch) else_branch = 
+            If(cond, then_branch, else_branch)
+          in
+          let elif_bodies =
+            List.fold_right fold_elif elif_branches else_branch
+          in
+          If(cond, body, elif_bodies)
+        };
+      while_stmt:
+        - !(Util.keyword)["while"] cond: !(Expr.expr)
+        - !(Util.keyword)["do"]
+        body: top_level_stmt
+        - !(Util.keyword)["od"]
+        { While(cond, body) };
+      repeat_stmt:
+        - !(Util.keyword)["repeat"]
+        body: top_level_stmt
+        - !(Util.keyword)["until"]
+        cond: !(Expr.expr)
+        { RepeatUntil(body, cond) };
+      for_stmt:
+        - !(Util.keyword)["for"]
+        init: stmt -"," cond: !(Expr.expr) -"," inc: stmt
+        - !(Util.keyword)["do"] body: top_level_stmt - !(Util.keyword)["od"]
+        { Seq(init, While(cond, Seq(body, inc))) }
     )
       
   end

@@ -102,14 +102,15 @@ let rec compile env scode = match scode with
       env, [Push s; Call "Lwrite"; Pop eax]
     | LD x ->
       let s, env = (env#global x)#allocate in
-      env, [Mov(M (env#loc x), s)]
+      env, [Mov(M (env#loc x), eax); Mov(eax, s)]
     | ST x ->
       let s, env = (env#global x)#pop in
       env, [Mov(s, M (env#loc x))]
     | BINOP op -> 
       let rhs, lhs, env = env#pop2 in
-      let cmp suff = env#push lhs, [Mov(L 0, eax);
-                                    Binop ("cmp", rhs, lhs);
+      let cmp suff = env#push lhs, [Mov(rhs, edx);
+                                    Mov(L 0, eax);
+                                    Binop ("cmp", edx, lhs);
                                     Set(suff, "%al");
                                     Mov(eax, lhs)]
       in
@@ -122,25 +123,35 @@ let rec compile env scode = match scode with
                                       Binop(op, eax, edx);
                                       Mov(edx, lhs)]
       in
-      match op with
-      | "+" -> env#push lhs, [Binop ("+", rhs, lhs)]
-      | "-" -> env#push lhs, [Binop ("-", rhs, lhs)]
-      | "*" -> env#push lhs, [Binop ("*", rhs, lhs)]
-      | "/" ->
-        let s, env = env#allocate in
-        env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(eax, s)]
-      | "%" ->
-        let s, env = env#allocate in
-        env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(edx, s)]
-      | "<" ->  cmp "l"
-      | ">" ->  cmp "g"
-      | "<=" -> cmp "le"
-      | ">=" -> cmp "ge"
-      | "==" -> cmp "e"
-      | "!=" -> cmp "ne"
-      | "&&" -> logical "&&"
-      | "!!" -> logical "!!"
-      | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" op)
+      (match op with
+       | "+" -> env#push lhs, [Mov(rhs, eax); Binop ("+", eax, lhs)]
+       | "-" -> env#push lhs, [Mov(rhs, eax); Binop ("-", eax, lhs)]
+       | "*" -> env#push lhs, [Mov(lhs, eax);
+                               Binop ("*", rhs, eax); 
+                               Mov(eax, lhs)]
+       | "/" ->
+         let s, env = env#allocate in
+         env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(eax, s)]
+       | "%" ->
+         let s, env = env#allocate in
+         env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(edx, s)]
+       | "<" ->  cmp "l"
+       | ">" ->  cmp "g"
+       | "<=" -> cmp "le"
+       | ">=" -> cmp "ge"
+       | "==" -> cmp "e"
+       | "!=" -> cmp "ne"
+       | "&&" -> logical "&&"
+       | "!!" -> logical "!!"
+       | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" op))
+    | LABEL(l) ->
+      env, [Label(l)]
+    | JMP(l) ->
+      env, [Jmp(l)]
+    | CJMP(jumpOnZero, l) ->
+      let s, env = env#pop in
+      let suff = if jumpOnZero then "e" else "ne" in
+      env, [Binop("cmp", L 0, s); CJmp(suff, l)]
   in
   let env, asm' = compile env scode' in
   env, asm @ asm'

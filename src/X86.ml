@@ -28,21 +28,22 @@ let esp = R 7
 
 (* Now x86 instruction (we do not need all of them): *)
 type instr =
-(* copies a value from the first to the second operand  *) | Mov   of opnd * opnd
-(* makes a binary operation; note, the first operand    *) | Binop of string * opnd * opnd
-(* designates x86 operator, not the source language one *)
-(* x86 integer division, see instruction set reference  *) | IDiv  of opnd
-(* see instruction set reference                        *) | Cltd
-(* sets a value from flags; the first operand is the    *) | Set   of string * string
-(* suffix, which determines the value being set, the    *)                     
-(* the second --- (sub)register name                    *)
-(* pushes the operand on the hardware stack             *) | Push  of opnd
-(* pops from the hardware stack to the operand          *) | Pop   of opnd
-(* call a function by a name                            *) | Call  of string
-(* returns from a function                              *) | Ret
-(* a label in the code                                  *) | Label of string
-(* a conditional jump                                   *) | CJmp  of string * string
-(* a non-conditional jump                               *) | Jmp   of string
+(* copies a value from the first to the second operand  *) | Mov     of opnd * opnd
+(* makes a binary operation; note, the first operand    *) | Binop   of string * opnd * opnd
+(* designates x86 operator, not the source language one *)  
+(* x86 integer division, see instruction set reference  *) | IDiv    of opnd
+(* see instruction set reference                        *) | Cltd  
+(* sets a value from flags; the first operand is the    *) | Set     of string * string
+(* suffix, which determines the value being set, the    *)                       
+(* the second --- (sub)register name                    *)  
+(* pushes the operand on the hardware stack             *) | Push    of opnd
+(* pops from the hardware stack to the operand          *) | Pop     of opnd
+(* call a function by a name                            *) | Call    of string
+(* returns from a function                              *) | Ret  
+(* a label in the code                                  *) | Label   of string
+(* a conditional jump                                   *) | CJmp    of string * string
+(* a non-conditional jump                               *) | Jmp     of string
+(* A comment in assembly                                *) | Comment of string
 
 (* Instruction printer *)
 let show instr =
@@ -63,28 +64,29 @@ let show instr =
   | L i -> Printf.sprintf "$%d" i
   in
   match instr with
-  | Cltd               -> "\tcltd"
-  | Set   (suf, s)     -> Printf.sprintf "\tset%s\t%s"     suf s
-  | IDiv   s1          -> Printf.sprintf "\tidivl\t%s"     (opnd s1)
-  | Binop (op, s1, s2) -> Printf.sprintf "\t%s\t%s,\t%s"   (binop op) (opnd s1) (opnd s2)
-  | Mov   (s1, s2)     -> Printf.sprintf "\tmovl\t%s,\t%s" (opnd s1) (opnd s2)
-  | Push   s           -> Printf.sprintf "\tpushl\t%s"     (opnd s)
-  | Pop    s           -> Printf.sprintf "\tpopl\t%s"      (opnd s)
-  | Ret                -> "\tret"
-  | Call   p           -> Printf.sprintf "\tcall\t%s" p
-  | Label  l           -> Printf.sprintf "%s:\n" l
-  | Jmp    l           -> Printf.sprintf "\tjmp\t%s" l
-  | CJmp  (s , l)      -> Printf.sprintf "\tj%s\t%s" s l
+  | Cltd                -> "\tcltd"
+  | Set    (suf, s)     -> Printf.sprintf "\tset%s\t%s"     suf s
+  | IDiv    s1          -> Printf.sprintf "\tidivl\t%s"     (opnd s1)
+  | Binop  (op, s1, s2) -> Printf.sprintf "\t%s\t%s,\t%s"   (binop op) (opnd s1) (opnd s2)
+  | Mov    (s1, s2)     -> Printf.sprintf "\tmovl\t%s,\t%s" (opnd s1) (opnd s2)
+  | Push    s           -> Printf.sprintf "\tpushl\t%s"     (opnd s)
+  | Pop     s           -> Printf.sprintf "\tpopl\t%s"      (opnd s)
+  | Ret                 -> "\tret"
+  | Call    p           -> Printf.sprintf "\tcall\t%s" p
+  | Label   l           -> Printf.sprintf "%s:\n" l
+  | Jmp     l           -> Printf.sprintf "\tjmp\t%s" l
+  | CJmp   (s , l)      -> Printf.sprintf "\tj%s\t%s" s l
+  | Comment s           -> Printf.sprintf "\t# %s" s
 
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
 (* Symbolic stack machine evaluator
 
-     compile : env -> prg -> env * instr list
+     compile : env -> prg -> env * instr list * string option list
 
-   Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
-   of x86 instructions
+   Take an environment, a stack machine program, and returns a tuple --- the updated environment, the list
+   of x86 instructions and debug comments
 *)
 let rec compile env scode = match scode with
 | [] -> env, []
@@ -93,19 +95,21 @@ let rec compile env scode = match scode with
     match instr with
     | CONST n ->
       let s, env = env#allocate in
-      env, [Mov(L n, s)]
+      env, [Comment(Printf.sprintf "CONST %d" n); Mov(L n, s)]
     | READ ->
       let s, env = env#allocate in
-      env, [Call "Lread"; Mov (eax, s)]
+      env, [Comment("READ"); Call "Lread"; Mov (eax, s)]
     | WRITE ->
       let s, env = env#pop in
-      env, [Push s; Call "Lwrite"; Pop eax]
+      env, [Comment("WRITE"); Push s; Call "Lwrite"; Pop eax]
     | LD x ->
       let s, env = (env#global x)#allocate in
-      env, [Mov(M (env#loc x), eax); Mov(eax, s)]
+      env, [Comment(Printf.sprintf "LD \"%s\"" x);
+            Mov(M (env#loc x), eax);
+            Mov(eax, s)]
     | ST x ->
       let s, env = (env#global x)#pop in
-      env, [Mov(s, M (env#loc x))]
+      env, [Comment(Printf.sprintf "ST \"%s\"" x); Mov(s, M (env#loc x))]
     | BINOP op -> 
       let rhs, lhs, env = env#pop2 in
       let cmp suff = env#push lhs, [Mov(rhs, edx);
@@ -123,7 +127,7 @@ let rec compile env scode = match scode with
                                       Binop(op, eax, edx);
                                       Mov(edx, lhs)]
       in
-      (match op with
+      let env, instructions = match op with
        | "+" -> env#push lhs, [Mov(rhs, eax); Binop ("+", eax, lhs)]
        | "-" -> env#push lhs, [Mov(rhs, eax); Binop ("-", eax, lhs)]
        | "*" -> env#push lhs, [Mov(lhs, eax);
@@ -143,15 +147,18 @@ let rec compile env scode = match scode with
        | "!=" -> cmp "ne"
        | "&&" -> logical "&&"
        | "!!" -> logical "!!"
-       | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" op))
+       | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" op)
+      in
+      env, Comment(Printf.sprintf "BINOP \"%s\"" op) :: instructions
     | LABEL(l) ->
-      env, [Label(l)]
+      env, [Comment(Printf.sprintf "LABEL %s" l); Label(l)]
     | JMP(l) ->
-      env, [Jmp(l)]
+      env, [Comment(Printf.sprintf "JMP %s" l); Jmp(l)]
     | CJMP(jumpOnZero, l) ->
       let s, env = env#pop in
       let suff = if jumpOnZero then "e" else "ne" in
-      env, [Binop("cmp", L 0, s); CJmp(suff, l)]
+      env, [Comment(Printf.sprintf "CJMP(%B, %s)" jumpOnZero l);
+            Binop("cmp", L 0, s); CJmp(suff, l)]
   in
   let env, asm' = compile env scode' in
   env, asm @ asm'
@@ -210,7 +217,9 @@ let compile_unit env scode =
   env, 
   ([Push ebp; Mov (esp, ebp); Binop ("-", L (word_size*env#allocated), esp)] @ 
    code @
-   [Mov (ebp, esp); Pop ebp; Binop ("^", eax, eax); Ret]
+   [Comment("End of program");
+    Mov (ebp, esp); Pop ebp;
+    Binop ("^", eax, eax); Ret]
   )
 
 (* Generates an assembler text for a program: first compiles the program into

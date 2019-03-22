@@ -98,25 +98,32 @@ let rec compile env scode = match scode with
       env, [Comment(Printf.sprintf "CONST %d" n); Mov(L n, s)]
     | READ ->
       let s, env = env#allocate in
-      env, [Comment("READ"); Call "Lread"; Mov (eax, s)]
+      env, [Comment("READ"); Call "Lread"; Mov(eax, s)]
     | WRITE ->
       let s, env = env#pop in
       env, [Comment("WRITE"); Push s; Call "Lwrite"; Pop eax]
     | LD x ->
       let s, env = (env#global x)#allocate in
-      env, [Comment(Printf.sprintf "LD \"%s\"" x);
-            Mov(M (env#loc x), eax);
-            Mov(eax, s)]
+      let name = env#loc x in
+      env,
+      Comment(Printf.sprintf "LD \"%s\"" x) :: (match s with
+        | R _ -> [Mov(M(name), s)]
+        | _   -> [Mov(M(name), eax); Mov(eax, s)])
     | ST x ->
       let s, env = (env#global x)#pop in
-      env, [Comment(Printf.sprintf "ST \"%s\"" x); Mov(s, M (env#loc x))]
+      let name = env#loc x in
+      env,
+      Comment(Printf.sprintf "ST \"%s\"" x) :: (match s with
+        | R _ -> [Mov(s, M(name))]
+        | _   -> [Mov(s, eax); Mov(eax, M(name))])
     | BINOP op -> 
       let rhs, lhs, env = env#pop2 in
-      let cmp suff = env#push lhs, [Mov(rhs, edx);
-                                    Mov(L 0, eax);
-                                    Binop ("cmp", edx, lhs);
-                                    Set(suff, "%al");
-                                    Mov(eax, lhs)]
+      
+      let cmp suff =
+        (env#push lhs, (match rhs with
+          | R _ -> [Mov(L 0, eax); Binop ("cmp", rhs, lhs)]
+          | _   -> [Mov(rhs, edx); Mov(L 0, eax); Binop ("cmp", edx, lhs)]) @
+        [Set(suff, "%al"); Mov(eax, lhs)])
       in
       let logical op = env#push lhs, [Mov(L 0, eax);
                                       Mov(L 0, edx);
@@ -128,11 +135,15 @@ let rec compile env scode = match scode with
                                       Mov(edx, lhs)]
       in
       let env, instructions = match op with
-       | "+" -> env#push lhs, [Mov(rhs, eax); Binop ("+", eax, lhs)]
-       | "-" -> env#push lhs, [Mov(rhs, eax); Binop ("-", eax, lhs)]
-       | "*" -> env#push lhs, [Mov(lhs, eax);
-                               Binop ("*", rhs, eax); 
-                               Mov(eax, lhs)]
+       | "+" -> (env#push lhs, (match rhs with
+          | R _ -> [Binop ("+", rhs, lhs)]
+          | _   -> [Mov(rhs, eax); Binop ("+", eax, lhs)]))
+       | "-" -> (env#push lhs, (match rhs with
+          | R _ -> [Binop ("-", rhs, lhs)]
+          | _   -> [Mov(rhs, eax); Binop ("-", eax, lhs)]))
+       | "*" -> (env#push lhs, (match lhs with
+          | R _ -> [Binop ("*", rhs, lhs)]
+          | _   -> [Mov(lhs, eax); Binop ("*", rhs, eax); Mov(eax, lhs)]))
        | "/" ->
          let s, env = env#allocate in
          env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(eax, s)]

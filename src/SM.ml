@@ -90,35 +90,54 @@ let compile stmt =
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   in
-  let rec compileWithLabels n = function
+  (* l is a number that we can start labels in the current code being compiled
+     with *)
+  (* ctx_l is a label number that marks the code after the current code
+     being compiled *)
+  (* Returns:
+     1) The next free label number to be passed to subsequent invocations
+        of this function
+     2) The flag whether the context label ctx_l has been jumped to
+     3) Compiled instructions *)
+  let rec compileWithLabels l ctx_l = function
   | Stmt.Seq (s1, s2) ->
-    let (n1, prg1) = compileWithLabels n  s1 in
-    let (n2, prg2) = compileWithLabels n1 s2 in
-    (n2, prg1 @ prg2)
+    let (l1, f1, prg1) = compileWithLabels (l + 1) l s1 in
+    let (l2, f2, prg2) = compileWithLabels l1 ctx_l s2 in
+    (l2, f2, prg1 @ (if f1 then [LABEL(label l)] else []) @ prg2)
   | Stmt.Read x ->
-    (n, [READ; ST x])
+    (l, false, [READ; ST x])
   | Stmt.Write e ->
-    (n, expr e @ [WRITE])
+    (l, false, expr e @ [WRITE])
   | Stmt.Assign (x, e) ->
-    (n, expr e @ [ST x])
-  | Stmt.Skip -> (n, [])
+    (l, false, expr e @ [ST x])
+  | Stmt.Skip ->
+    (l, false, [])
   | Stmt.If(cond, then_branch, else_branch) ->
-    let (n, then_prg) = compileWithLabels n then_branch in
-    let (n, else_branch) = compileWithLabels n else_branch in
-    (n + 2,
-     expr cond @ [CJMP(true, label n)] @
+    let (l1, _, then_prg) = compileWithLabels (l + 1) ctx_l then_branch in
+    let (l2, _, else_prg) = compileWithLabels l1 ctx_l else_branch in
+    (l2,
+     true,
+     expr cond @ [CJMP(true, label l)] @
      then_prg @
-     [JMP(label (n + 1)); LABEL(label n)] @
-     else_branch @
-     [LABEL(label (n + 1))])
+     [JMP(label ctx_l); LABEL(label l)] @
+     else_prg)
   | Stmt.While(cond, body) ->
-    let (n, body_prg) = compileWithLabels n body in
-    (n + 2,
-    [JMP(label n); LABEL(label (n + 1))] @ body_prg @ [LABEL(label n)] @
-    expr cond @ [CJMP(false, label (n + 1))])
+    let (l1, _, body_prg) = compileWithLabels (l + 2) l body in
+    (l1,
+     false,
+     [JMP(label l); LABEL(label (l + 1))] @
+     body_prg @
+     [LABEL(label l)] @
+     expr cond @
+     [CJMP(false, label (l + 1))])
   | Stmt.RepeatUntil(body, cond) ->
-    let (n, body_prg) = compileWithLabels n body in
-    (n + 1, [LABEL(label n)] @ body_prg @ expr cond @ [CJMP(true, label n)])
+    let (l1, f, body_prg) = compileWithLabels (l + 2) l body in
+    (l1,
+     false,
+     [LABEL(label l)] @
+     body_prg @
+     (if f then [LABEL(label (l + 1))] else []) @
+     expr cond @ [CJMP(true, label l)])
   in
-  let (_, p) = compileWithLabels 1 stmt in
-  p
+  let (_, f, p) = compileWithLabels 2 1 stmt in
+  p @ (if f then [LABEL(label 1)] else [])

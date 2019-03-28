@@ -56,6 +56,29 @@ module Expr =
         +, -                 --- addition, subtraction
         *, /, %              --- multiplication, division, reminder
     *)
+
+    let int_from_bool b = if b then 1 else 0
+    let bool_from_int i = i != 0
+
+    (* Binary operation evaluator
+         val evalBinop : string -> int -> int -> int
+       Evaluates the given binary operator on lhs and rhs as its arguments
+     *)
+    let evalBinop name lhs rhs = match name with
+    | "+" -> lhs + rhs
+    | "-" -> lhs - rhs
+    | "*" -> lhs * rhs
+    | "/" -> lhs / rhs
+    | "%" -> lhs mod rhs
+    | "<" -> int_from_bool (lhs < rhs)
+    | ">" -> int_from_bool (lhs > rhs)
+    | "<=" -> int_from_bool (lhs <= rhs)
+    | ">=" -> int_from_bool (lhs >= rhs)
+    | "==" -> int_from_bool (lhs = rhs)
+    | "!=" -> int_from_bool (lhs <> rhs)
+    | "&&" -> int_from_bool ((bool_from_int lhs) && (bool_from_int rhs))
+    | "!!" -> int_from_bool ((bool_from_int lhs) || (bool_from_int rhs))
+    | _ -> failwith (Printf.sprintf "Unsupported binary operator %s" name)
       
     (* Expression evaluator
 
@@ -63,32 +86,13 @@ module Expr =
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-    *)                                                       
-    let to_func op =
-      let bti   = function true -> 1 | _ -> 0 in
-      let itb b = b <> 0 in
-      let (|>) f g   = fun x y -> f (g x y) in
-      match op with
-      | "+"  -> (+)
-      | "-"  -> (-)
-      | "*"  -> ( * )
-      | "/"  -> (/)
-      | "%"  -> (mod)
-      | "<"  -> bti |> (< )
-      | "<=" -> bti |> (<=)
-      | ">"  -> bti |> (> )
-      | ">=" -> bti |> (>=)
-      | "==" -> bti |> (= )
-      | "!=" -> bti |> (<>)
-      | "&&" -> fun x y -> bti (itb x && itb y)
-      | "!!" -> fun x y -> bti (itb x || itb y)
-      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)    
-    
-    let rec eval st expr =      
-      match expr with
-      | Const n -> n
-      | Var   x -> State.eval st x
-      | Binop (op, x, y) -> to_func op (eval st x) (eval st y)
+    *)
+    let rec eval s e = match e with
+      | Const(num) -> num
+      | Var(name) -> State.eval s name
+      | Binop(name, e1, e2) -> evalBinop name (eval s e1) (eval s e2)
+
+    let parseBinop op = (ostap ($(op)), fun lhs rhs -> Binop(op, lhs, rhs))               
 
     (* Expression parser. You can use the following terminals:
 
@@ -96,27 +100,26 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
                                                                                                                   
     *)
-    ostap (                                      
-      parse:
-	  !(Ostap.Util.expr 
-             (fun x -> x)
-	     (Array.map (fun (a, s) -> a, 
-                           List.map  (fun s -> ostap(- $(s)), (fun x y -> Binop (s, x, y))) s
-                        ) 
-              [|                
-		`Lefta, ["!!"];
-		`Lefta, ["&&"];
-		`Nona , ["=="; "!="; "<="; "<"; ">="; ">"];
-		`Lefta, ["+" ; "-"];
-		`Lefta, ["*" ; "/"; "%"];
-              |] 
-	     )
-	     primary);
-      
-      primary:
-        n:DECIMAL {Const n}
-      | x:IDENT   {Var x}
-      | -"(" parse -")"
+    ostap (
+      parse: expr;
+      expr: 
+        !(Util.expr
+            (fun x -> x)
+            [|
+              `Lefta, [parseBinop "!!"];
+              `Lefta, [parseBinop "&&"];
+              `Nona, [parseBinop "==";
+                      parseBinop "!=";
+                      parseBinop "<=";
+                      parseBinop "<" ;
+                      parseBinop ">=";
+                      parseBinop ">"];
+              `Lefta, [parseBinop "+"; parseBinop "-"];
+              `Lefta, [parseBinop "*"; parseBinop "/"; parseBinop "%"]
+            |]
+            primary
+         );
+      primary: x: IDENT { Var x } | n: DECIMAL { Const n } | -"(" expr -")"
     )
     
   end
@@ -151,7 +154,50 @@ module Stmt =
 
        which returns a list of formal parameters and a body for given definition
     *)
-    let rec eval _ = failwith "Not Implemented Yet"
+    let rec eval env conf stmt =
+      let (st, i, o) = conf in
+      match stmt with
+      | Read(var) -> (match i with
+        | [] -> failwith (Printf.sprintf "Reached EOF")
+        | head :: tail -> (State.update var head st, tail, o))
+      | Write(expr) -> (st, i, o @ [Expr.eval st expr])
+      | Assign(var, expr) -> (State.update var (Expr.eval st expr) st, i, o)
+      | Seq(stmt1, stmt2) -> eval env (eval env conf stmt1) stmt2
+      | Skip -> conf
+      | If(cond, then_branch, else_branch) ->
+        if Expr.bool_from_int (Expr.eval st cond)
+        then eval env conf then_branch
+        else eval env conf else_branch
+      | While(cond, body) -> 
+        let rec evalWhile conf =
+          let (st, _, _) = conf in
+          if Expr.bool_from_int (Expr.eval st cond)
+          then evalWhile (eval env conf body)
+          else conf
+        in
+        evalWhile conf
+      | Repeat(body, cond) ->
+        let rec evalRepeatUntil conf =
+          let conf = eval env conf body in
+          let (st, _, _) = conf in
+          if Expr.bool_from_int (Expr.eval st cond)
+          then conf
+          else evalRepeatUntil conf
+        in
+        evalRepeatUntil conf
+      | Call(callee, args) ->
+        let (argNames, localVars, body) = env#definition callee in
+        let localState = State.push_scope st (argNames @ localVars) in
+        let bindings = List.combine argNames args in
+        let localStateInitialized =
+          List.fold_right
+            (fun (argName, argExpr) s -> State.update argName (Expr.eval st argExpr) s)
+            bindings
+            localState
+        in
+        let (expiredLocalState, i, o) = eval env (localStateInitialized, i, o) body in
+        (State.drop_scope expiredLocalState st, i, o)
+
                                 
     (* Statement parser *)
     ostap (                                      
@@ -218,7 +264,7 @@ module Stmt =
         - !(Util.keyword)["do"] body: top_level_stmt - !(Util.keyword)["od"]
         { Seq(init, While(cond, Seq(body, inc))) };
       call_stmt:
-        callee: IDENT -"(" args: !(Util.list)[Expr.parse] -")"
+        callee: IDENT -"(" args: !(Util.list0)[Expr.parse] -")"
         { Call(callee, args) }
     )
       
@@ -236,7 +282,7 @@ module Definition =
         - !(Util.keyword)["fun"]
         name: IDENT
         -"("
-        args: !(Util.list)[ostap (IDENT)]
+        args: !(Util.list0)[ostap (IDENT)]
         -")"
         local_vars: (- !(Util.keyword)["local"] !(Util.list)[ostap (IDENT)])?
         -"{"

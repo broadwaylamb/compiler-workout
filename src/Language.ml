@@ -5,6 +5,7 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
+open Ostap
 
 (* States *)
 module State =
@@ -154,7 +155,71 @@ module Stmt =
                                 
     (* Statement parser *)
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      parse:
+        top_level_stmt;
+      top_level_stmt:
+        stmt1: stmt -";" stmt2: top_level_stmt { Seq(stmt1, stmt2) } | stmt;
+      stmt: 
+        read_stmt   |
+        write_stmt  |
+        assign_stmt |
+        skip_stmt   |
+        if_stmt     |
+        while_stmt  |
+        repeat_stmt |
+        for_stmt    |
+        call_stmt;
+      assign_stmt:
+        x: IDENT -":=" e: !(Expr.parse) { Assign(x, e) };
+      read_stmt:
+        - !(Util.keyword)["read"] -"(" x: IDENT -")" { Read(x) };
+      write_stmt:
+        - !(Util.keyword)["write"] -"(" e: !(Expr.parse) -")" { Write(e) };
+      skip_stmt:
+        - !(Util.keyword)["skip"] { Skip };
+      condition_part:
+        cond: !(Expr.parse)
+        - !(Util.keyword)["then"] then_branch: top_level_stmt
+        { (cond, then_branch) };
+      if_stmt:
+        - !(Util.keyword)["if"] first_cond: condition_part
+        elif_branches: (- !(Util.keyword)["elif"] condition_part)*
+        else_branch: (- !(Util.keyword)["else"] top_level_stmt)?
+        - !(Util.keyword)["fi"]
+        {
+          let (cond, body) = first_cond in
+          let else_branch = match else_branch with
+          | None -> Skip
+          | Some stmt -> stmt
+          in
+          let fold_elif (cond, then_branch) else_branch = 
+            If(cond, then_branch, else_branch)
+          in
+          let elif_bodies =
+            List.fold_right fold_elif elif_branches else_branch
+          in
+          If(cond, body, elif_bodies)
+        };
+      while_stmt:
+        - !(Util.keyword)["while"] cond: !(Expr.parse)
+        - !(Util.keyword)["do"]
+        body: top_level_stmt
+        - !(Util.keyword)["od"]
+        { While(cond, body) };
+      repeat_stmt:
+        - !(Util.keyword)["repeat"]
+        body: top_level_stmt
+        - !(Util.keyword)["until"]
+        cond: !(Expr.parse)
+        { Repeat(body, cond) };
+      for_stmt:
+        - !(Util.keyword)["for"]
+        init: stmt -"," cond: !(Expr.parse) -"," inc: stmt
+        - !(Util.keyword)["do"] body: top_level_stmt - !(Util.keyword)["od"]
+        { Seq(init, While(cond, Seq(body, inc))) };
+      call_stmt:
+        callee: IDENT -"(" args: !(Util.list)[Expr.parse] -")"
+        { Call(callee, args) }
     )
       
   end
@@ -167,7 +232,17 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      parse:
+        - !(Util.keyword)["fun"]
+        name: IDENT
+        -"("
+        args: !(Util.list)[ostap (IDENT)]
+        -")"
+        local_vars: (- !(Util.keyword)["local"] !(Util.list)[ostap (IDENT)])?
+        -"{"
+        body: !(Stmt.parse)
+        -"}"
+        { (name, (args, (match local_vars with None -> [] | Some vars -> vars), body)) }
     )
 
   end

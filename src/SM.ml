@@ -11,7 +11,7 @@ open Language
 (* store a variable from the stack *) | ST    of string
 (* a label                         *) | LABEL of string
 (* unconditional jump              *) | JMP   of string
-(* conditional jump                *) | CJMP  of string * string
+(* conditional jump                *) | CJMP  of bool * string
 (* begins procedure definition     *) | BEGIN of string * string list * string list
 (* end procedure definition        *) | END
 (* calls a function/procedure      *) | CALL  of string * int * bool
@@ -32,7 +32,8 @@ type config = (prg * State.t) list * int list * Expr.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                                                  
-let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) prg = failwith "Not implemented"
+let rec eval env ((controlStack, stack, ((state, input, output) as stmtConf)) as conf) program =
+  failwith "unimplemented"
 
 (* Top-level evaluation
 
@@ -57,4 +58,14 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let compile (defs, p) = failwith "Not implemented"
+let compile (functions, main) = failwith "unimplemented"
+  (* l is a number that we can start labels in the current code being compiled
+     with *)
+  (* ctx_l is a label number that marks the code after the current code
+     being compiled *)
+  (* Returns:
+     1) The next free label number to be passed to subsequent invocations
+        of this function
+     2) The flag whether the context label ctx_l has been jumped to
+     3) Compiled instructions *)
+  (* let rec compileWithLabels l ctx_l = failwith "unimplemented" *)

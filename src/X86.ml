@@ -108,11 +108,10 @@ let rec compile env scode = match scode with
       env, [Comment("WRITE"); Push s; Call "Lwrite"; Pop eax]
     | LD x ->
       let s, env = (env#global x)#allocate in
-      let name = env#loc x in
       env,
       Comment(Printf.sprintf "LD \"%s\"" x) :: (match s with
-        | R _ -> [Mov(name, s)]
-        | _   -> [Mov(name, eax); Mov(eax, s)])
+        | R _ -> [Mov(env#loc x, s)]
+        | _   -> [Mov(env#loc x, eax); Mov(eax, s)])
     | ST x ->
       let s, env = (env#global x)#pop in
       let name = env#loc x in
@@ -122,7 +121,6 @@ let rec compile env scode = match scode with
         | _   -> [Mov(s, eax); Mov(eax, name)])
     | BINOP op -> 
       let rhs, lhs, env = env#pop2 in
-
       let cmp suff =
         (env#push lhs, (match rhs with
           | R _ -> [Mov(L 0, eax); Binop ("cmp", rhs, lhs)]
@@ -174,6 +172,53 @@ let rec compile env scode = match scode with
       let suff = if jumpOnZero then "e" else "ne" in
       env, [Comment(Printf.sprintf "CJMP(onZero: %B, \"%s\")" jumpOnZero l);
             Binop("cmp", L 0, s); CJmp(suff, l)]
+    | BEGIN(symbol, argNames, localVars) ->
+      let env = env#enter symbol argNames localVars in
+      let commentStr = Printf.sprintf "BEGIN(\"%s\", [%s], [%s])"
+        symbol
+        (String.concat ", " argNames)
+        (String.concat ", " localVars)
+      in
+      env, [Comment(commentStr); Push(ebp); Mov(esp, ebp); Binop("-", M("$" ^ env#lsize), esp)]
+    | END ->
+      env, [Comment("END");
+            Label(env#epilogue);
+            Mov(ebp, esp);
+            Pop(ebp);
+            Ret;
+            Meta(Printf.sprintf "\t.set\t%s, \t%d" env#lsize (env#allocated * word_size))]
+    | CALL(callee, argc, hasRetVal) ->
+      let pushr, popr = List.split (List.map (fun r -> (Push(r), Pop(r))) env#live_registers) in
+      let env, code =
+        if argc = 0
+        then env, pushr @ [Call(callee)] @ (List.rev popr)
+        else
+          let rec pushArgs env instructions = function
+            | 0 -> env, instructions
+            | argc -> let s, env = env#pop in pushArgs env (Push(s) :: instructions) (argc - 1)
+          in
+          let env, pushs = pushArgs env [] argc in
+          env,
+          pushr @
+          pushs @
+          [Call(callee); Binop("+", L(argc * word_size), esp)] @
+          (List.rev popr)
+      in
+      let env, code =
+        if hasRetVal
+        then let s, env = env#allocate in env, code @ [Mov(eax, s)]
+        else env, code
+      in
+      env,
+      Comment(Printf.sprintf "CALL(\"%s\", %d, hasRetVal: %B)" callee argc hasRetVal) :: code
+    | RET(hasRetVal) -> 
+      let comment = Comment(Printf.sprintf "RET(hasRetVal: %B)" hasRetVal) in
+      if hasRetVal
+      then
+        let r, env = env#pop in
+        env, [comment; Mov(r, eax); Jmp(env#epilogue)]
+      else
+        env, [comment; Jmp(env#epilogue)]
   in
   let env, asm' = compile env scode' in
   env, asm @ asm'
@@ -206,7 +251,7 @@ class env =
       	| []                            -> ebx     , 0
       	| (S n)::_                      -> S (n+1) , n+1
       	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
-              | (M _)::s                      -> allocate' s
+        | (M _)::s                      -> allocate' s
       	| _                             -> S 0     , 1
       	in
       	allocate' stack

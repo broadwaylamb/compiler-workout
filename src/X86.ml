@@ -107,7 +107,12 @@ let compile env code =
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc = 
+  let rec enumerate n = function
+    | [] -> []
+    | h :: t -> (h, n) :: enumerate (n + 1) t
+  in
+  enumerate 0
                      
 class env =
   object (self)

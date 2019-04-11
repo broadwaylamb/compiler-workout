@@ -211,7 +211,18 @@ module Expr =
             binaryOperand
          );
       binaryOperand:
-        length | subscript | primary;
+        p: primary
+        is: ( -"[" !(expr) -"]" )*
+        l: ".length"?
+        {
+          let res = match is with
+          | head :: tail -> List.fold_left (fun e index -> Elem(e, index)) (Elem(p, head)) tail
+          | _ -> p
+          in
+          match l with
+          | Some _ -> Length res
+          | None -> res
+        };
       primary:
         callee: IDENT -"(" args: !(Util.list0)[expr] -")" { Call(callee, args) } |
         x: IDENT { Var x }                                                       |
@@ -219,13 +230,7 @@ module Expr =
         -"[" arr: !(Util.list0)[expr] -"]" { Array arr }                         |
         str: STRING { String (String.sub str 1 (String.length str - 2)) }        |
         ch: CHAR { Const(Char.code ch) }                                         |
-        -"(" expr -")";
-      subscript:
-        arr: primary
-        <i :: is> : ( -"[" !(expr) -"]" )+
-        { List.fold_left (fun e index -> Elem(e, index)) (Elem(arr, i)) is };
-      length:
-        arr: (subscript | primary) -".length" { Length arr }
+        -"(" expr -")"
     )
     
   end

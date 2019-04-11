@@ -30,9 +30,10 @@ module Value =
     let of_array  a = Array  a
 
     let list_init len f =
-      let rec list_init = function
-      | len -> []
-      | n -> (f n) :: list_init (n + 1)
+      let rec list_init n =
+        if n >= len
+        then []
+        else (f n) :: list_init (n + 1)
       in
       list_init 0
 

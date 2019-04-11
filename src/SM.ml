@@ -145,12 +145,19 @@ let compile (functions, main) =
   | Expr.Elem  (arr, i)       -> callExpr "$elem" [i; arr] true
   | Expr.Length(arr)          -> callExpr "$length" [arr] true
   | Expr.Call  (callee, args) -> callExpr callee args true
+  
   and callExpr callee args hasRetVal =
+    let trueCallee =
+      if List.exists (fun (name, _) -> name == callee) functions
+      then callee
+      else match callee with
+      | "read"  -> "Lread"
+      | "write" -> "Lwrite"
+      | _       -> callee
+    in
     List.fold_left
       (fun rest arg -> expr arg @ rest)
-      [CALL((match callee with "read" -> "Lread" | "write" -> "Lwrite" | _ -> callee),
-            List.length args,
-            hasRetVal)]
+      [CALL(trueCallee, List.length args, hasRetVal)]
       args
   in
   (* l is a number that we can start labels in the current code being compiled

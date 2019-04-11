@@ -148,7 +148,9 @@ let compile (functions, main) =
   and callExpr callee args hasRetVal =
     List.fold_left
       (fun rest arg -> expr arg @ rest)
-      [CALL(callee, List.length args, hasRetVal)]
+      [CALL((match callee with "read" -> "Lread" | "write" -> "Lwrite" | _ -> callee),
+            List.length args,
+            hasRetVal)]
       args
   in
   (* l is a number that we can start labels in the current code being compiled

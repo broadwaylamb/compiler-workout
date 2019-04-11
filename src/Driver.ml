@@ -17,9 +17,9 @@ let parse infile =
                                   "length";
                                   "case"; "of"; "esac"; "when"] s
        inherit Util.Lexers.skip [
-	 Matcher.Skip.whitespaces " \t\n";
-	 Matcher.Skip.lineComment "--";
-	 Matcher.Skip.nestedComment "(*" "*)"
+	       Matcher.Skip.whitespaces " \t\n";
+	       Matcher.Skip.lineComment "--";
+	       Matcher.Skip.nestedComment "(*" "*)"
        ] s
      end
     )

@@ -184,7 +184,9 @@ let rec compile env scode = match scode with
             Ret;
             Meta(Printf.sprintf "\t.set\t%s, \t%d" env#lsize (env#allocated * word_size))]
     | CALL(callee, argc, hasRetVal) ->
-      let pushr, popr = List.split (List.map (fun r -> (Push(r), Pop(r))) env#live_registers) in
+      let pushr, popr = List.split
+        (List.map (fun r -> (Push(r), Pop(r))) (env#live_registers 1))
+      in
       let env, code =
         if argc = 0
         then env, pushr @ [Call(callee)] @ (List.rev popr)

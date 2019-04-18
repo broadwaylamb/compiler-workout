@@ -37,7 +37,7 @@ type config = (prg * State.t) list * Value.t list * Expr.config
 
 let printStack stack = Printf.printf
   "[%s]\n\n"
-  (String.concat ", " (List.map ((GT.transform(Value.t) (new @Value.t[show])) ()) stack))
+  (String.concat ", " (List.map Value.show stack))
   
 let printInsn i = Printf.printf "%s\n" (GT.transform(insn) (new @insn[show]) () i)
 
@@ -65,7 +65,8 @@ let rec eval env ((controlStack, stack, ((state, input, output) as stmtConf)) as
        eval env (controlStack, (Value.of_int @@ Expr.evalBinop op lhs rhs) :: tail, stmtConf) rest
      | _ -> failwith "Empty stack")
   | CONST(num) :: rest -> eval env (controlStack, (Value.of_int num) :: stack, stmtConf) rest
-  | STRING(str) :: rest -> eval env (controlStack, (Value.of_string str) :: stack, stmtConf) rest
+  | STRING(str) :: rest ->
+    eval env (controlStack, (Value.of_string (Bytes.of_string str)) :: stack, stmtConf) rest
   | LD(var) :: rest -> eval env (controlStack, (State.eval state var) :: stack, stmtConf) rest
   | ST(var) :: rest ->
     (match stack with

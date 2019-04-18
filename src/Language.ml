@@ -13,6 +13,13 @@ module Value =
 
     @type t = Int of int | String of bytes | Array of t array | Sexp of string * t list (*with show*)
 
+    let rec show = function
+    | Int n -> Printf.sprintf "%d" n
+    | String s -> Bytes.to_string s
+    | Array arr -> Printf.sprintf "[%s]" (String.concat ", " (List.map show (Array.to_list arr)))
+    | Sexp (tag, []) -> Printf.sprintf "`%s" tag
+    | Sexp (tag, l) -> Printf.sprintf "`%s (%s)" tag (String.concat ", " (List.map show l))
+
     let to_int = function 
     | Int n -> n 
     | _     -> failwith "int value expected"
@@ -191,15 +198,15 @@ module Expr =
     *)                                                       
     let rec eval env ((st, i, o, r) as conf) = function
       | Const(num) -> (st, i, o, Some(Value.of_int num))
-      | Array(expressions) -> eval env conf (Call("$array", expressions))
-      | String(s) -> (st, i, o, Some(Value.of_string s))
+      | Array(expressions) -> eval env conf (Call(".array", expressions))
+      | String(s) -> (st, i, o, Some(Value.of_string (Bytes.of_string s)))
       | Sexp(_) -> failwith "Unimplemented"
       | Var(name) -> (st, i, o, Some(State.eval st name))
       | Binop(name, e1, e2) ->
         let ((st, i, o, _), lhs :: rhs :: []) = evalSequentially env conf [e1; e2] in
         (st, i, o, Some(Value.of_int @@ evalBinop name (Value.to_int lhs) (Value.to_int rhs)))
-      | Elem(arr, index) -> eval env conf (Call("$elem", [arr; index]))
-      | Length(arr) -> eval env conf (Call("$length", [arr]))
+      | Elem(arr, index) -> eval env conf (Call(".elem", [arr; index]))
+      | Length(arr) -> eval env conf (Call(".length", [arr]))
       | Call(callee, args) -> (
         let (conf, argValues) = evalSequentially env conf args in
         env#definition env callee argValues conf)

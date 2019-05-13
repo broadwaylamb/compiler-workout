@@ -15,7 +15,7 @@ module Value =
 
     let rec show = function
     | Int n -> Printf.sprintf "%d" n
-    | String s -> Bytes.to_string s
+    | String s -> Printf.sprintf "\"%s\"" @@ Bytes.to_string s
     | Array arr -> Printf.sprintf "[%s]" (String.concat ", " (List.map show (Array.to_list arr)))
     | Sexp (tag, []) -> Printf.sprintf "`%s" tag
     | Sexp (tag, l) -> Printf.sprintf "`%s (%s)" tag (String.concat ", " (List.map show l))
@@ -113,18 +113,29 @@ module Builtin =
   struct
       
     let eval (st, i, o, _) args = function
-    | "read"     -> (match i with z::i' -> (st, i', o, Some (Value.of_int z)) | _ -> failwith "Unexpected end of input")
-    | "write"    -> (st, i, o @ [Value.to_int @@ List.hd args], None)
-    | ".elem"    -> let [b; j] = args in
-                    (st, i, o, let i = Value.to_int j in
-                               Some (match b with
-                                     | Value.String   s  -> Value.of_int @@ Char.code (Bytes.get s i)
-                                     | Value.Array    a  -> a.(i)
-                                     | Value.Sexp (_, a) -> List.nth a i
-                               )
-                    )         
-    | ".length"     -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Sexp (_, a) -> List.length a | Value.Array a -> Array.length a | Value.String s -> Bytes.length s)))
+    | "read" -> (match i with 
+      | z :: i' -> (st, i', o, Some (Value.of_int z))
+      | _       -> failwith "Unexpected end of input")
+    | "write" -> (st, i, o @ [Value.to_int @@ List.hd args], None)
+    | ".elem" ->
+      let [b; j] = args in
+      (st, i, o, let i = Value.to_int j in
+        Some (match b with
+              | Value.String   s  -> Value.of_int @@ Char.code (Bytes.get s i)
+              | Value.Array    a  -> a.(i)
+              | Value.Sexp (_, a) -> List.nth a i)
+      )         
+    | ".length" ->
+      let length = (match List.hd args with
+      | Value.Sexp (_, a) -> List.length a
+      | Value.Array a     -> Array.length a
+      | Value.String s    -> Bytes.length s)
+      in
+      (st, i, o, Some (Value.of_int length))
     | ".array"      -> (st, i, o, Some (Value.of_array @@ Array.of_list args))
+    | ".string"     -> 
+      let stringRepr = Value.show @@ List.hd args in
+      (st, i, o, Some (Value.of_string @@ Bytes.of_string stringRepr))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
        
@@ -147,6 +158,8 @@ module Expr =
     (* element extraction *) | Elem   of t * t
     (* length             *) | Length of t 
     (* function call      *) | Call   of string * t list with show
+
+    type member = MLength | MString
 
     (* Available binary operators:
         !!                   --- disjunction
@@ -200,7 +213,9 @@ module Expr =
       | Const(num) -> (st, i, o, Some(Value.of_int num))
       | Array(expressions) -> eval env conf (Call(".array", expressions))
       | String(s) -> (st, i, o, Some(Value.of_string (Bytes.of_string s)))
-      | Sexp(_) -> failwith "Unimplemented"
+      | Sexp(tag, expressions) ->
+        let ((st, i, o, _), values) = evalSequentially env conf expressions in
+        (st, i, o, Some(Value.sexp tag values))
       | Var(name) -> (st, i, o, Some(State.eval st name))
       | Binop(name, e1, e2) ->
         let ((st, i, o, _), lhs :: rhs :: []) = evalSequentially env conf [e1; e2] in
@@ -209,6 +224,7 @@ module Expr =
       | Length(arr) -> eval env conf (Call(".length", [arr]))
       | Call(callee, args) -> (
         let (conf, argValues) = evalSequentially env conf args in
+        (* Printf.printf "calling %s(%s)\n" callee (String.concat ", " (List.map Value.show argValues)); *)
         env#definition env callee argValues conf)
     and evalSequentially env conf expressions =
       let (conf, values) = List.fold_left
@@ -247,7 +263,12 @@ module Expr =
             binaryOperand
          );
       binaryOperand:
-        length | subscript | primary;
+        obj: (subscript | primary) m: member? { 
+          match m with
+          | Some MLength -> Length obj
+          | Some MString -> Call(".string", [obj])
+          | None         -> obj
+        };
       primary:
         callee: IDENT -"(" args: !(Util.list0)[expr] -")" { Call(callee, args) } |
         x: IDENT { Var x }                                                       |
@@ -255,13 +276,19 @@ module Expr =
         -"[" arr: !(Util.list0)[expr] -"]" { Array arr }                         |
         str: STRING { String (String.sub str 1 (String.length str - 2)) }        |
         ch: CHAR { Const(Char.code ch) }                                         |
+        -"`" tag: IDENT values: (-"(" !(Util.list0)[expr] -")")?
+          { Sexp(tag, match values with None -> [] | Some l -> l) }              |
         -"(" expr -")";
       subscript:
         arr: primary
         <i :: is> : ( -"[" !(expr) -"]" )+
         { List.fold_left (fun e index -> Elem(e, index)) (Elem(arr, i)) is };
-      length:
-        arr: (subscript | primary) -".length" { Length arr }
+      member:
+        mlength | mstring;
+      mlength:
+        -".length" { MLength };
+      mstring:
+        -".string" { MString }
     )
     
   end
@@ -276,14 +303,22 @@ module Stmt =
 
         (* The type for patterns *)
         @type t =
-        (* wildcard "-"     *) | Wildcard
+        (* wildcard "_"     *) | Wildcard
         (* S-expression     *) | Sexp   of string * t list
         (* identifier       *) | Ident  of string
         with show, foldl
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+          parse:
+            wildcard | sexp | identifier;
+          wildcard:
+            -"_" { Wildcard };
+          sexp:
+            -"`" tag: IDENT values: (-"(" !(Util.list0)[parse] -")")?
+            { Sexp(tag, match values with None -> [] | Some l -> l) };
+          identifier:
+            id: IDENT { Ident id }
         )
         
         let vars p =
@@ -321,7 +356,27 @@ module Stmt =
            ) 
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
-          
+
+    (* Takes a value to match, a state and a pattern and returns some local state
+       if matching succeeds and None otherwise *)
+    let match_pattern value pattern =
+      let rec match_pattern' value local_state = function
+        | Pattern.Wildcard -> Some(local_state)
+        | Pattern.Ident(x) -> Some(State.bind x value local_state)
+        | Pattern.Sexp(pattern_tag, pattern_elems) -> (match value with
+          | Value.Sexp(tag, elements)
+            when tag = pattern_tag && List.length pattern_elems = List.length elements ->
+            List.fold_left
+              match_sexp_payload
+              (Some(local_state))
+              (List.combine elements pattern_elems)
+          | _ -> None)
+      and match_sexp_payload res (elem, patt) = match res with
+        | Some(s) -> match_pattern' elem s patt
+        | None -> None
+      in
+      match_pattern' value State.undefined pattern
+
     let rec eval env ((st, i, o, r) as conf) continuation = function
       | Assign(var, subscripts, expr) -> (
         let (conf, indices) = Expr.evalSequentially env conf subscripts in
@@ -347,11 +402,25 @@ module Stmt =
         if Expr.bool_from_int num
         then eval env (st, i, o, None) Skip continuation
         else eval env (st, i, o, None) continuation (Repeat(body, cond)))
+      | Case (cond, branches) ->
+        
+        let (st, i, o, Some(value)) = Expr.eval env conf cond in
+        
+        let rec perform_patternmatching = function
+        | [] -> eval env conf Skip continuation
+        | (pattern, body) :: remaining_patterns -> (match match_pattern value pattern with
+          | Some(local_state) ->
+            let st = State.push st local_state (Pattern.vars pattern) in
+            eval env (st, i, o, None) continuation (Seq(body, Leave))
+          | None -> perform_patternmatching remaining_patterns)
+        in
+        perform_patternmatching branches
       | Return(None) -> (st, i, o, None)
       | Return(Some(expr)) -> Expr.eval env conf expr
       | Call(callee, args) -> (
         let (st, i, o, _) = Expr.eval env conf (Expr.Call(callee, args)) in
         eval env (st, i, o, None) Skip continuation)
+      | Leave -> eval env (State.drop st, i, o, None) Skip continuation
     and appendContinuation stmt = function
       | Skip -> stmt
       | continuation -> Seq(stmt, continuation)
@@ -360,72 +429,78 @@ module Stmt =
     ostap (
       parse:
           top_level_stmt;
-        top_level_stmt:
-          stmt1: stmt -";" stmt2: top_level_stmt { Seq(stmt1, stmt2) } | stmt;
-        stmt: 
-          assign_stmt |
-          skip_stmt   |
-          return_stmt |
-          if_stmt     |
-          while_stmt  |
-          repeat_stmt |
-          for_stmt    |
-          call_stmt;
-        assign_stmt:
-          x: IDENT
-          subscripts: ( -"[" !(Expr.parse) -"]" )*
-          -":="
-          e: !(Expr.parse) { Assign(x, subscripts, e) };
-        skip_stmt:
-          %"skip" { Skip };
-        return_stmt:
-          %"return"
-          expr: (!(Expr.parse))?
-          { Return(expr) };
-        condition_part:
-          cond: !(Expr.parse)
-          %"then" then_branch: top_level_stmt
-          { (cond, then_branch) };
-        if_stmt:
-          %"if" first_cond: condition_part
-          elif_branches: (%"elif" condition_part)*
-          else_branch: (%"else" top_level_stmt)?
-          %"fi"
-          {
-            let (cond, body) = first_cond in
-            let else_branch = match else_branch with
-            | None -> Skip
-            | Some stmt -> stmt
-            in
-            let fold_elif (cond, then_branch) else_branch = 
-              If(cond, then_branch, else_branch)
-            in
-            let elif_bodies =
-              List.fold_right fold_elif elif_branches else_branch
-            in
-            If(cond, body, elif_bodies)
-          };
-        while_stmt:
-          %"while" cond: !(Expr.parse)
-          %"do"
-          body: top_level_stmt
-          %"od"
-          { While(cond, body) };
-        repeat_stmt:
-          %"repeat"
-          body: top_level_stmt
-          %"until"
-          cond: !(Expr.parse)
-          { Repeat(body, cond) };
-        for_stmt:
-          %"for"
-          init: stmt -"," cond: !(Expr.parse) -"," inc: stmt
-          %"do" body: top_level_stmt %"od"
-          { Seq(init, While(cond, Seq(body, inc))) };
-        call_stmt:
-          callee: IDENT -"(" args: !(Util.list0)[Expr.parse] -")"
-          { Call(callee, args) }
-      )
+      top_level_stmt:
+        stmt1: stmt -";" stmt2: top_level_stmt { Seq(stmt1, stmt2) } | stmt;
+      stmt: 
+        assign_stmt |
+        skip_stmt   |
+        return_stmt |
+        if_stmt     |
+        while_stmt  |
+        repeat_stmt |
+        for_stmt    |
+        call_stmt   |
+        case_stmt;
+      assign_stmt:
+        x: IDENT
+        subscripts: ( -"[" !(Expr.parse) -"]" )*
+        -":="
+        e: !(Expr.parse) { Assign(x, subscripts, e) };
+      skip_stmt:
+        %"skip" { Skip };
+      return_stmt:
+        %"return"
+        expr: (!(Expr.parse))?
+        { Return(expr) };
+      condition_part:
+        cond: !(Expr.parse)
+        %"then" then_branch: top_level_stmt
+        { (cond, then_branch) };
+      if_stmt:
+        %"if" first_cond: condition_part
+        elif_branches: (%"elif" condition_part)*
+        else_branch: (%"else" top_level_stmt)?
+        %"fi"
+        {
+          let (cond, body) = first_cond in
+          let else_branch = match else_branch with
+          | None -> Skip
+          | Some stmt -> stmt
+          in
+          let fold_elif (cond, then_branch) else_branch = 
+            If(cond, then_branch, else_branch)
+          in
+          let elif_bodies =
+            List.fold_right fold_elif elif_branches else_branch
+          in
+          If(cond, body, elif_bodies)
+        };
+      while_stmt:
+        %"while" cond: !(Expr.parse)
+        %"do"
+        body: top_level_stmt
+        %"od"
+        { While(cond, body) };
+      repeat_stmt:
+        %"repeat"
+        body: top_level_stmt
+        %"until"
+        cond: !(Expr.parse)
+        { Repeat(body, cond) };
+      for_stmt:
+        %"for"
+        init: stmt -"," cond: !(Expr.parse) -"," inc: stmt
+        %"do" body: top_level_stmt %"od"
+        { Seq(init, While(cond, Seq(body, inc))) };
+      call_stmt:
+        callee: IDENT -"(" args: !(Util.list0)[Expr.parse] -")"
+        { Call(callee, args) };
+      case_stmt:
+        %"case" cond: !(Expr.parse) %"of"
+        branches: !(Util.list0By)[ostap ("|")][ostap ( !(Pattern.parse) -"->" top_level_stmt )]
+        %"esac"
+        { Case(cond, branches) }
+    )
       
   end
 

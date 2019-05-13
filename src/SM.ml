@@ -100,9 +100,34 @@ let rec eval env ((controlStack, stack, ((state, input, output) as stmtConf)) as
     eval env (controlStack, stack, (localStateInitialized, input, output)) rest
   | END :: _ | RET(_) :: _ ->
     (match controlStack with
-    | [] -> conf
-    | (rest, oldState) :: controlStack ->
-      eval env (controlStack, stack, (State.leave state oldState, input, output)) rest)
+     | [] -> conf
+     | (rest, oldState) :: controlStack ->
+       eval env (controlStack, stack, (State.leave state oldState, input, output)) rest)
+  | DROP :: rest -> (match stack with
+     | _ :: tail ->
+       eval env (controlStack, tail, stmtConf) rest
+     | [] -> failwith "Empty stack")
+  | DUP :: rest -> (match stack with
+     | head :: _ ->
+       eval env (controlStack, head :: stack, stmtConf) rest
+     | [] -> failwith "Empty stack")
+  | SWAP :: rest -> (match stack with
+     | x :: y :: tail ->
+       eval env (controlStack, y :: x :: tail, stmtConf) rest
+     | _ -> failwith "Empty stack")
+  | TAG(t) :: rest -> (match stack with
+     | Value.Sexp(t', _) :: tail when t' == t ->
+       eval env (controlStack, (Value.of_int 1) :: tail, stmtConf) rest
+     | _ :: tail -> eval env (controlStack, (Value.of_int 0) :: tail, stmtConf) rest
+     | _ -> failwith "Empty stack")
+  | ENTER(scoped_names) :: rest -> failwith "Unimplemented"
+    (* let localState = State.push state () scoped_names in
+    let bind (state, stack) argName = match stack with
+    | [] -> failwith "Empty stack"
+    | head :: tail -> (State.update argName head state, tail)
+    in
+    let (localStateInitialized, stack) = List.fold_left bind (localState, stack) argNames in
+    eval env (controlStack, stack, (localStateInitialized, input, output)) rest *)
 
 (* Top-level evaluation
 

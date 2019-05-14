@@ -263,7 +263,7 @@ module Expr =
             binaryOperand
          );
       binaryOperand:
-        obj: (subscript | primary) m: member? { 
+        obj: subscript m: member? { 
           match m with
           | Some MLength -> Length obj
           | Some MString -> Call(".string", [obj])
@@ -281,8 +281,10 @@ module Expr =
         -"(" expr -")";
       subscript:
         arr: primary
-        <i :: is> : ( -"[" !(expr) -"]" )+
-        { List.fold_left (fun e index -> Elem(e, index)) (Elem(arr, i)) is };
+        is: ( -"[" !(expr) -"]" )*
+        { match is with
+          | [] -> arr
+          | i :: is -> List.fold_left (fun e index -> Elem(e, index)) (Elem(arr, i)) is };
       member:
         mlength | mstring;
       mlength:

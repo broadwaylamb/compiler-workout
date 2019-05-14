@@ -321,8 +321,10 @@ module Stmt =
             id: IDENT { Ident id }
         )
         
-        let vars p =
-          transform(t) (fun f -> object inherit [string list, _] @t[foldl] f method c_Ident s _ name = name::s end) [] p
+        let rec vars = function
+        | Wildcard -> []
+        | Ident(name) -> [name]
+        | Sexp(_, ps) -> List.fold_left (fun acc p -> vars p @ acc) [] ps
 
         let rec depth = function
         | Wildcard | Ident(_) -> 0

@@ -161,6 +161,8 @@ let rec compile env scode = match scode with
       env, Comment(Printf.sprintf "BINOP \"%s\"" op) :: instructions
     | LABEL(l) ->
       env, [Comment(Printf.sprintf "LABEL \"%s\"" l); Label(l)]
+    | COMMENT(s) ->
+      env, [Comment(s)]
     | JMP(l) ->
       env, [Comment(Printf.sprintf "JMP \"%s\"" l); Jmp(l)]
     | CJMP(jumpOnZero, l) ->

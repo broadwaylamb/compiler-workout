@@ -101,10 +101,10 @@ module State =
       recurse st'
 
     (* Push a new local scope *)
-    let push st s xs = L (xs, s, st)
+    let push st mapping names = L (names, mapping, st)
 
     (* Drop a local scope *)
-    let drop (L (_, _, e)) = e
+    let drop (L (_, _, enclosing)) = enclosing
                                
   end
 
@@ -322,7 +322,12 @@ module Stmt =
         )
         
         let vars p =
-          transform(t) (fun f -> object inherit [string list, _] @t[foldl] f method c_Ident s _ name = name::s end) [] p         
+          transform(t) (fun f -> object inherit [string list, _] @t[foldl] f method c_Ident s _ name = name::s end) [] p
+
+        let rec depth = function
+        | Wildcard | Ident(_) -> 0
+        | Sexp(_, ps)         -> List.fold_left (fun d p -> max d (depth p) + 1) 0 ps
+
       end
         
     (* The type for statements *)

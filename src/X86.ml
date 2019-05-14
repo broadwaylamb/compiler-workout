@@ -244,12 +244,12 @@ module M = Map.Make (String)
 (* Environment implementation *)           
 class env =
   let chars          = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNJPQRSTUVWXYZ" in
-  let make_assoc = 
+  let make_assoc l i = 
 	  let rec enumerate n = function
 	    | [] -> []
 	    | h :: t -> (h, n) :: enumerate (n + 1) t
 	  in
-	  enumerate 0
+	  enumerate i l
   in
   let rec assoc  x   = function [] -> raise Not_found | l :: ls -> try List.assoc x l with Not_found -> assoc x ls in
   object (self)

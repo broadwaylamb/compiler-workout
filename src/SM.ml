@@ -187,6 +187,7 @@ let compile (functions, main) =
   | Expr.Binop (op, x, y)     -> expr x @ expr y @ [BINOP op]
   | Expr.Elem  (arr, i)       -> callExpr ".elem" [i; arr] true
   | Expr.Length(arr)          -> callExpr ".length" [arr] true
+  | Expr.StringVal(s)         -> callExpr ".stringval" [s] true
   | Expr.Call  (callee, args) -> callExpr callee args true
   and callExpr callee args hasRetVal =
     let trueCallee =

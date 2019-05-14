@@ -237,6 +237,7 @@ module Expr =
         (st, i, o, Some(Value.of_int @@ evalBinop name (Value.to_int lhs) (Value.to_int rhs)))
       | Elem(arr, index) -> eval env conf (Call(".elem", [arr; index]))
       | Length(arr) -> eval env conf (Call(".length", [arr]))
+      | StringVal(s) -> eval env conf (Call(".stringval", [s]))
       | Call(callee, args) -> (
         let (conf, argValues) = evalSequentially env conf args in
         (* Printf.printf "calling %s(%s)\n" callee (String.concat ", " (List.map Value.show argValues)); *)
@@ -278,10 +279,10 @@ module Expr =
             binaryOperand
          );
       binaryOperand:
-        obj: subscript m: member? { 
+        obj: subscript m: (-"." member)? { 
           match m with
-          | Some MLength -> Length obj
-          | Some MString -> Call(".string", [obj])
+          | Some MLength -> Length    obj
+          | Some MString -> StringVal obj
           | None         -> obj
         };
       primary:
@@ -303,9 +304,9 @@ module Expr =
       member:
         mlength | mstring;
       mlength:
-        -".length" { MLength };
+        -"length" { MLength };
       mstring:
-        -".string" { MString }
+        -"string" { MString }
     )
     
   end

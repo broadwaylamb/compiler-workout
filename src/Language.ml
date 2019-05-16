@@ -148,8 +148,8 @@ module Builtin =
       (st, i, o, Some (Value.of_int length))
     | ".array"      -> (st, i, o, Some (Value.of_array @@ Array.of_list args))
     | ".stringval"  -> 
-      let stringRepr = Value.show @@ List.hd args in
-      (st, i, o, Some (Value.of_string @@ Bytes.of_string stringRepr))
+      let stringRepr = Value.string_val @@ List.hd args in
+      (st, i, o, Some (Value.of_string stringRepr))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
        

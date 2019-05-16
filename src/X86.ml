@@ -97,6 +97,32 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+let compileFunctionCall env callee argc hasRetVal =
+  let pushr, popr = List.split
+    (List.map (fun r -> (Push(r), Pop(r))) (env#live_registers 1))
+  in
+  let env, code =
+    if argc = 0
+    then env, pushr @ [Call(callee)] @ (List.rev popr)
+    else
+      let rec pushArgs env instructions = function
+        | 0 -> env, instructions
+        | argc -> let s, env = env#pop in pushArgs env (Push(s) :: instructions) (argc - 1)
+      in
+      let env, pushs = pushArgs env [] argc in
+      env,
+      pushr @
+      pushs @
+      [Call(callee); Binop("+", L(argc * word_size), esp)] @
+      (List.rev popr)
+  in
+  let env, code =
+    if hasRetVal
+    then let s, env = env#allocate in env, code @ [Mov(eax, s)]
+    else env, code
+  in
+  env, code
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -108,11 +134,31 @@ let rec compile env scode = match scode with
 | [] -> env, []
 | instr :: scode' ->
   let env, asm =
+    (* Printf.printf "\n%s\n\n" env#show_stack; *)
+    (* printInsn instr; *)
     match instr with
     | CONST n ->
       let s, env = env#allocate in
-      env, [Comment(Printf.sprintf "CONST %d" n); Mov(L n, s)]
-    | STRING s -> env, [Comment(Printf.sprintf "STRING \"%s\"" s)]
+      env, [Comment(Printf.sprintf "CONST %d" n); Mov(L ((n lsl 1) lor 1), s)]
+    | STRING s ->
+      let loc, env = env#string s in
+      let s', env = env#allocate in
+      let env, code = compileFunctionCall env "Bstring" 1 true in
+      env,
+      Comment(Printf.sprintf "STRING \"%s\"" s) :: Mov(M ("$" ^ loc), s') :: code
+    | SEXP (tag, len) ->
+      let tagLoc, env = env#allocate in
+      let lenLoc, env = env#allocate in
+      let env, code = compileFunctionCall env "Bsexp" (len + 2) true in
+      env, 
+      [Comment(Printf.sprintf "SEXP (\"`%s\", %d)" tag len);
+       Mov(L len, lenLoc);
+       Mov(L (env#hash tag), tagLoc)] @ code
+    | ARRAY len ->
+      let s, env = env#allocate in
+      let env, code = compileFunctionCall env "Barray" (len + 1) true in
+      env, 
+      Comment(Printf.sprintf "ARRAY (%d)" len) :: Mov(L len, s) :: code
     | LD x ->
       let s, env = (env#global x)#allocate in
       env,
@@ -126,40 +172,91 @@ let rec compile env scode = match scode with
       Comment(Printf.sprintf "ST \"%s\"" x) :: (match s with
         | R _ -> [Mov(s, name)]
         | _   -> [Mov(s, eax); Mov(eax, name)])
-    | STA(arr, i) -> env, [Comment(Printf.sprintf "STA(\"%s\", %d)" arr i)]
+    | STA(var, k) ->
+      let varloc  = env#loc var in
+      let s,  env = env#allocate in
+      let s', env = env#allocate in
+      let env, code = compileFunctionCall env "Bsta" (k + 3) false in
+      let code = match s with
+      | R _ -> Mov(varloc, s) :: code
+      | _   -> Mov(varloc, edx) :: Mov(edx, s) :: code
+      in
+      env,
+      Comment(Printf.sprintf "STA(\"%s\", %d)" var k) :: Mov(L k, s') :: code
     | BINOP op -> 
       let rhs, lhs, env = env#pop2 in
       let cmp suff =
         (env#push lhs, (match rhs with
-          | R _ -> [Mov(L 0, eax); Binop ("cmp", rhs, lhs)]
-          | _   -> [Mov(rhs, edx); Mov(L 0, eax); Binop ("cmp", edx, lhs)]) @
-        [Set(suff, "%al"); Mov(eax, lhs)])
+          | R _ -> [Mov(L 0, eax);
+                    Sar1 lhs;
+                    Sar1 rhs;
+                    Binop ("cmp", rhs, lhs)]
+          | _   -> [Mov(rhs, edx);
+                    Mov(L 0, eax);
+                    Sar1 edx;
+                    Sal1 lhs;
+                    Binop ("cmp", edx, lhs)]) @
+        [Set(suff, "%al"); Sal1 eax; Or1 eax; Mov(eax, lhs)])
       in
       let logical op = env#push lhs, [Mov(L 0, eax);
                                       Mov(L 0, edx);
+                                      Sar1 lhs;
+                                      Sar1 rhs;
                                       Binop("cmp", L 0, lhs);
                                       Set("ne", "%al");
                                       Binop("cmp", L 0, rhs);
                                       Set("ne", "%dl");
                                       Binop(op, eax, edx);
+                                      Sal1 edx;
+                                      Or1 edx;
                                       Mov(edx, lhs)]
       in
       let env, instructions = match op with
        | "+" -> (env#push lhs, (match rhs with
-          | R _ -> [Binop ("+", rhs, lhs)]
-          | _   -> [Mov(rhs, eax); Binop ("+", eax, lhs)]))
+          | R _ -> [Binop ("+", rhs, lhs);
+                    Dec lhs]
+          | _   -> [Mov(rhs, eax);
+                    Binop ("+", eax, lhs);
+                    Dec lhs]))
        | "-" -> (env#push lhs, (match rhs with
-          | R _ -> [Binop ("-", rhs, lhs)]
-          | _   -> [Mov(rhs, eax); Binop ("-", eax, lhs)]))
+          | R _ -> [Binop ("-", rhs, lhs);
+                    Or1 lhs]
+          | _   -> [Mov(rhs, eax);
+                    Binop ("-", eax, lhs);
+                    Or1 lhs]))
        | "*" -> (env#push lhs, (match lhs with
-          | R _ -> [Binop ("*", rhs, lhs)]
-          | _   -> [Mov(lhs, eax); Binop ("*", rhs, eax); Mov(eax, lhs)]))
+          | R _ -> [Sar1 rhs;
+                    Sar1 lhs;
+                    Binop ("*", rhs, lhs);
+                    Sal1 lhs;
+                    Or1 lhs]
+          | _   -> [Mov(lhs, eax);
+                    Sar1 rhs;
+                    Sar1 eax;
+                    Binop ("*", rhs, eax);
+                    Sal1 eax;
+                    Or1 eax;
+                    Mov(eax, lhs)]))
        | "/" ->
          let s, env = env#allocate in
-         env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(eax, s)]
+         env, [Mov (lhs, eax);
+               Sar1 rhs;
+               Sar1 eax;
+               Cltd;
+               IDiv rhs;
+               Sal1 eax;
+               Or1 eax;
+               Mov(eax, s)]
        | "%" ->
          let s, env = env#allocate in
-         env, [Mov (lhs, eax); Cltd; IDiv rhs; Mov(edx, s)]
+         env, [Mov (lhs, eax);
+               Sar1 rhs;
+               Sar1 eax;
+               Cltd;
+               IDiv rhs;
+               Sal1 edx;
+               Or1 edx;
+               Mov(edx, s)]
        | "<" ->  cmp "l"
        | ">" ->  cmp "g"
        | "<=" -> cmp "le"
@@ -172,16 +269,20 @@ let rec compile env scode = match scode with
       in
       env, Comment(Printf.sprintf "BINOP \"%s\"" op) :: instructions
     | LABEL(l) ->
-      env, [Comment(Printf.sprintf "LABEL \"%s\"" l); Label(l)]
+      env#retrieve_stack l,
+      [Comment(Printf.sprintf "LABEL \"%s\"" l); Label(l)]
     | COMMENT(s) ->
       env, [Comment(s)]
     | JMP(l) ->
-      env, [Comment(Printf.sprintf "JMP \"%s\"" l); Jmp(l)]
+      env#set_stack l, [Comment(Printf.sprintf "JMP \"%s\"" l); Jmp(l)]
     | CJMP(jumpOnZero, l) ->
       let s, env = env#pop in
       let suff = if jumpOnZero then "e" else "ne" in
-      env, [Comment(Printf.sprintf "CJMP(onZero: %B, \"%s\")" jumpOnZero l);
-            Binop("cmp", L 0, s); CJmp(suff, l)]
+      env#set_stack l,
+      [Comment(Printf.sprintf "CJMP(onZero: %B, \"%s\")" jumpOnZero l);
+       Sar1 s;
+       Binop("cmp", L 0, s);
+       CJmp(suff, l)]
     | BEGIN(symbol, argNames, localVars) ->
       let env = env#enter symbol argNames localVars in
       let commentStr = Printf.sprintf "BEGIN(\"%s\", [%s], [%s])"
@@ -198,31 +299,8 @@ let rec compile env scode = match scode with
             Ret;
             Meta(Printf.sprintf "\t.set\t%s, \t%d" env#lsize (env#allocated * word_size))]
     | CALL(callee, argc, hasRetVal) ->
-      let pushr, popr = List.split
-        (List.map (fun r -> (Push(r), Pop(r))) (env#live_registers 1))
-      in
-      let env, code =
-        if argc = 0
-        then env, pushr @ [Call(callee)] @ (List.rev popr)
-        else
-          let rec pushArgs env instructions = function
-            | 0 -> env, instructions
-            | argc -> let s, env = env#pop in pushArgs env (Push(s) :: instructions) (argc - 1)
-          in
-          let env, pushs = pushArgs env [] argc in
-          env,
-          pushr @
-          pushs @
-          [Call(callee); Binop("+", L(argc * word_size), esp)] @
-          (List.rev popr)
-      in
-      let env, code =
-        if hasRetVal
-        then let s, env = env#allocate in env, code @ [Mov(eax, s)]
-        else env, code
-      in
-      env,
-      Comment(Printf.sprintf "CALL(\"%s\", %d, hasRetVal: %B)" callee argc hasRetVal) :: code
+      let env, code = compileFunctionCall env callee argc hasRetVal in
+      env, Comment(Printf.sprintf "CALL(\"%s\", %d, hasRetVal: %B)" callee argc hasRetVal) :: code
     | RET(hasRetVal) -> 
       let comment = Comment(Printf.sprintf "RET(hasRetVal: %B)" hasRetVal) in
       if hasRetVal
@@ -231,6 +309,45 @@ let rec compile env scode = match scode with
         env, [comment; Mov(r, eax); Jmp(env#epilogue)]
       else
         env, [comment; Jmp(env#epilogue)]
+    | DROP ->
+      let env = if env#is_stack_empty
+      then env
+      else let _, env = env#pop in env
+      in
+      env, [Comment "DROP"]
+    | DUP ->
+      let top = env#peek in
+      let s, env = env#allocate in
+      env, [Comment "DUP"; Mov(top, s)]
+    | SWAP ->
+      let x, y = env#peek2 in
+      env, [Comment "SWAP"; Mov(x, eax)] @
+            (match (x, y) with
+            | (R _, _) | (_, R _) -> [Mov(y, x)]
+            | _ -> [Mov(y, edx); Mov(edx, x)]) @
+           [Mov(eax, y)]
+    | TAG(tag) ->
+      let s, env = env#allocate in
+      let hash = env#hash tag in
+      let env, code = compileFunctionCall env "Btag" 2 true in
+      env, Comment(Printf.sprintf "TAG(\"%s\")" tag) :: Mov(L hash, s) :: code
+    | ENTER(vars) ->
+      let env, code =
+        List.fold_left
+          (fun (env, code) var ->
+             let s, env = env#pop in
+             let copyFromSymbolicStackToLocalVariable = match s with
+             | R _ -> [Mov(s, env#loc var)]
+             | _   -> [Mov(s, eax); Mov(eax, env#loc var)]
+             in
+             env, copyFromSymbolicStackToLocalVariable :: code
+          )
+          (env#scope @@ List.rev vars, [])
+          vars
+      in
+      env,
+      Comment(Printf.sprintf "ENTER([%s])" @@ String.concat ", " vars) :: (List.flatten @@ List.rev code)
+    | LEAVE -> env#unscope, [Comment "LEAVE"]
   in
   let env, asm' = compile env scode' in
   env, asm @ asm'
@@ -243,7 +360,8 @@ module M = Map.Make (String)
 
 (* Environment implementation *)           
 class env =
-  let chars          = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNJPQRSTUVWXYZ" in
+  let chars = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNJPQRSTUVWXYZ" in
+
   let make_assoc l i = 
 	  let rec enumerate n = function
 	    | [] -> []
@@ -251,7 +369,12 @@ class env =
 	  in
 	  enumerate i l
   in
-  let rec assoc  x   = function [] -> raise Not_found | l :: ls -> try List.assoc x l with Not_found -> assoc x ls in
+
+  let rec assoc  x = function
+  | [] -> raise Not_found
+  | l :: ls -> try List.assoc x l with Not_found -> assoc x ls
+  in
+
   object (self)
     val globals     = S.empty (* a set of global variables         *)
     val stringm     = M.empty (* a string map                      *)
@@ -267,6 +390,8 @@ class env =
                         
     method show_stack =
       GT.show(list) (GT.show(opnd)) stack
+
+    method is_stack_empty = List.length stack == 0
              
     method print_locals =
       Printf.printf "LOCALS: size = %d\n" static_size;
@@ -288,11 +413,15 @@ class env =
     method drop_barrier = {< barrier = false >}
                             
     (* associates a stack to a label *)
-    method set_stack l = (*Printf.printf "Setting stack for %s\n" l;*) {< stackmap = M.add l stack stackmap >}
+    method set_stack l =
+      (* Printf.printf "Setting stack for %s: %s\n" l self#show_stack; *)
+      {< stackmap = M.add l stack stackmap >}
                                
     (* retrieves a stack for a label *)
-    method retrieve_stack l = (*Printf.printf "Retrieving stack for %s\n" l;*)
-      try {< stack = M.find l stackmap >} with Not_found -> self
+    method retrieve_stack l =
+      let res = try {< stack = M.find l stackmap >} with Not_found -> self in
+      (* Printf.printf "Retrieving stack for %s: %s\n" l res#show_stack; *)
+      res
                                
     (* gets a name for a global variable *)
     method loc x =
@@ -303,13 +432,13 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
-	let rec allocate' = function
-	| []                            -> ebx          , 0
-	| (S n)::_                      -> S (n+1)      , n+2
-	| (R n)::_ when n < num_of_regs -> R (n+1)      , stack_slots
-	| _                             -> S static_size, static_size+1
-	in
-	allocate' stack
+      	let rec allocate' = function
+      	| []                            -> ebx          , 0
+      	| (S n)::_                      -> S (n+1)      , n+2
+      	| (R n)::_ when n < num_of_regs -> R (n+1)      , stack_slots
+      	| _                             -> S static_size, static_size+1
+      	in
+      	allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
@@ -317,7 +446,9 @@ class env =
     method push y = {< stack = y::stack >}
 
     (* pops one operand from the symbolic stack *)
-    method pop = let x::stack' = stack in x, {< stack = stack' >}
+    method pop = match stack with
+    | x :: stack' -> x, {< stack = stack' >}
+    | _ -> failwith "Error when popping: empty symbolic stack"
 
     (* pops two operands from the symbolic stack *)
     method pop2 = let x::y::stack' = stack in x, y, {< stack = stack' >}
@@ -357,15 +488,22 @@ class env =
     method allocated = stack_slots                                
                                 
     (* enters a function *)
-    method enter f a l =
-      let n = List.length l in
-      {< static_size = n; stack_slots = n; stack = []; locals = [make_assoc l 0]; args = make_assoc a 0; fname = f >}
+    method enter fname argNames localNames =
+      let n = List.length localNames in
+      {< static_size = n;
+         stack_slots = n;
+         stack = [];
+         locals = [make_assoc localNames 0];
+         args = make_assoc argNames 0;
+         fname = fname >}
 
     (* enters a scope *)
     method scope vars =
       let n = List.length vars in
       let static_size' = n + static_size in
-      {< stack_slots = max stack_slots static_size'; static_size = static_size'; locals = (make_assoc vars static_size) :: locals >}
+      {< stack_slots = max stack_slots static_size';
+         static_size = static_size';
+         locals = (make_assoc vars static_size) :: locals >}
 
     (* leaves a scope *)
     method unscope =
@@ -413,5 +551,5 @@ let build prog name =
   Printf.fprintf outf "%s" (genasm prog);
   close_out outf;
   let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../runtime" in
-  Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
+  Sys.command (Printf.sprintf "gcc -g -O0 -m32 -o %s %s/runtime.o %s.s" name inc name)
  

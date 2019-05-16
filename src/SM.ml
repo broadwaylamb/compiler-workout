@@ -7,6 +7,7 @@ open Language
 (* put a constant on the stack     *) | CONST   of int
 (* put a string on the stack       *) | STRING  of string
 (* create an S-expression          *) | SEXP    of string * int
+(* create an array                 *) | ARRAY   of int
 (* load a variable to the stack    *) | LD      of string
 (* store a variable from the stack *) | ST      of string
 (* store in an array               *) | STA     of string * int
@@ -70,15 +71,18 @@ let rec eval env ((controlStack, stack, ((state, input, output) as stmtConf)) as
     eval env (controlStack, (Value.of_string (Bytes.of_string str)) :: stack, stmtConf) rest
   | SEXP(tag, len) :: rest -> 
     let (values, stack) = split len stack in
-    eval env (controlStack, (Value.sexp tag (List.rev values)) :: stack, stmtConf) rest
+    eval env (controlStack, (Value.sexp tag values) :: stack, stmtConf) rest
+  | ARRAY(len) :: rest -> 
+    let (values, stack) = split len stack in
+    eval env (controlStack, (Value.of_array @@ Array.of_list values) :: stack, stmtConf) rest
   | LD(var) :: rest -> eval env (controlStack, (State.eval state var) :: stack, stmtConf) rest
   | ST(var) :: rest ->
     (match stack with
      | head :: tail ->
        eval env (controlStack, tail, (State.update var head state, input, output)) rest
      | _ -> failwith "Empty stack")
-  | STA(var, k) :: rest -> (match split k stack with
-    | (indices, value :: tail) ->
+  | STA(var, k) :: rest -> (match split (k + 1) stack with
+    | (value :: indices, tail) ->
       eval env (controlStack, tail, (Stmt.update state var value indices, input, output)) rest
     | _ -> failwith "Empty stack")
   | LABEL(_) :: rest -> eval env conf rest
@@ -156,7 +160,11 @@ let run p i =
          method is_label l = M.mem l m
          method labeled l = M.find l m
          method builtin (cstack, stack, (st, i, o)) f n p =
-           let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
+           let f = match f.[0] with
+           | 'L' -> String.sub f 1 (String.length f - 1)
+           | 'B' -> "." ^ (String.sub f 1 (String.length f - 1))
+           | _   -> f
+           in
            let args, stack' = split n stack in
            let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
            let stack'' = if p then stack' else let Some r = r in r::stack' in
@@ -180,9 +188,9 @@ let compile (functions, main) =
   let label n = Printf.sprintf "L%d" n in
   let rec expr = function
   | Expr.Const  n             -> [CONST n]
-  | Expr.Array  elems         -> callExpr ".array" (List.rev elems) true
+  | Expr.Array  elems         -> List.concat (List.rev (List.map expr elems)) @ [ARRAY(List.length elems)]
   | Expr.String s             -> [STRING s]
-  | Expr.Sexp   (tag, elems)  -> List.concat (List.map expr elems) @ [SEXP(tag, List.length elems)]
+  | Expr.Sexp   (tag, elems)  -> List.concat (List.rev (List.map expr elems)) @ [SEXP(tag, List.length elems)]
   | Expr.Var    x             -> [LD x]
   | Expr.Binop (op, x, y)     -> expr x @ expr y @ [BINOP op]
   | Expr.Elem  (arr, i)       -> callExpr ".elem" [i; arr] true
@@ -194,9 +202,15 @@ let compile (functions, main) =
       if List.exists (fun (name, _) -> name == callee) functions
       then callee
       else match callee with
-      | "read"  -> "Lread"
-      | "write" -> "Lwrite"
-      | _       -> callee
+      | "read"
+      | "write"
+      | "raw"
+      | "printf"
+      | "strcat"
+      | "fprintf"
+      | "fopen"
+      | "fclose" -> "L" ^ callee
+      | _        -> String.map (function '.' -> 'B' | c -> c) callee
     in
     List.fold_left
       (fun rest arg -> expr arg @ rest)
@@ -206,7 +220,7 @@ let compile (functions, main) =
 
   let pattern' patterns f = 
     let handleSubpatterns i subpattern = 
-      [DUP; CONST(i); CALL(".elem", 2, true);] @ f subpattern
+      [DUP; CONST(i); CALL("Belem", 2, true);] @ f subpattern
     in
     List.concat @@ List.mapi handleSubpatterns patterns
   in
@@ -236,7 +250,7 @@ let compile (functions, main) =
     | Stmt.Pattern.Sexp(tag, patterns) -> 
       let elemsCode = (List.concat @@
           List.rev
-            (List.mapi (fun i subpatt -> [DUP; CONST(i); CALL(".elem", 2, true); SWAP]) patterns)
+            (List.mapi (fun i subpatt -> [DUP; CONST(i); CALL("Belem", 2, true); SWAP]) patterns)
       ) @ [DROP]
       in
       [COMMENT(Printf.sprintf "extracting elements from `%s" tag)] @
@@ -267,7 +281,7 @@ let compile (functions, main) =
   | Stmt.Assign (x, [], e) ->
     (l, false, expr e @ [ST x])
   | Stmt.Assign (x, subscripts, e) ->
-    let indicesInstructions = (List.fold_left (fun rest e -> expr e @ rest) [] (subscripts @ [e]))
+    let indicesInstructions = (List.fold_left (fun rest e -> expr e @ rest) [] (e :: subscripts))
     in
     (l,
     false,

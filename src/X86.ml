@@ -194,7 +194,7 @@ let rec compile env scode = match scode with
           | _   -> [Mov(rhs, edx);
                     Mov(L 0, eax);
                     Sar1 edx;
-                    Sal1 lhs;
+                    Sar1 lhs;
                     Binop ("cmp", edx, lhs)]) @
         [Set(suff, "%al"); Sal1 eax; Or1 eax; Mov(eax, lhs)])
       in
